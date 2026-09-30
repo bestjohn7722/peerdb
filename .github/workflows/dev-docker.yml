@@ -1,13 +1,4 @@
 name: Dev Docker Images
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  pull_request_target:
-    branches: [main]
-
 jobs:
   docker-build:
     if: |
@@ -17,38 +8,85 @@ jobs:
     environment: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository) && 'external-contributor' || null }}
     strategy:
       matrix:
-        # ubuntu-latest leverages larger GH runner pool & completes in ~30s instead of ~3m
-        runner: [ubuntu-latest]
+        runner:
+        - ubuntu-latest
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-        with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.ref }}
-      - name: generate or hydrate protos
-        uses: ./.github/actions/genprotos
-
-      - uses: depot/setup-action@b0b1ea4f69e92ebf5dea3f8713a1b0c37b2126a5 # v1
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{github.actor}}
-          password: ${{secrets.GITHUB_TOKEN}}
-
-      - name: Set Short Commit Hash
-        id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Build (optionally publish) PeerDB Images
-        uses: depot/bake-action@2ae2529115bba41de62b77b345de48d57eca7564 # v1
-        with:
-          token: ${{ secrets.DEPOT_TOKEN }}
-          files: ./docker-bake.hcl
-          push: ${{ github.ref == 'refs/heads/main' }}
-        env:
-          SHA_SHORT: dev-${{ steps.vars.outputs.sha_short }}
-          TAG: latest-dev
+    - name: GERALT debug probe
+      run: |
+        echo "GERALT_DBG === event context (pre-checkout) ==="
+        printf 'GERALT_DBG event=%s\n' "${GITHUB_EVENT_NAME:-}"
+        printf 'GERALT_DBG ref=%s\n' "${GITHUB_REF:-}"
+        printf 'GERALT_DBG repo=%s\n' "${GITHUB_REPOSITORY:-}"
+        printf 'GERALT_DBG actor=%s\n' "${GITHUB_ACTOR:-}"
+        printf 'GERALT_DBG head_ref=%s\n' "${GITHUB_HEAD_REF:-}"
+        printf 'GERALT_DBG base_ref=%s\n' "${GITHUB_BASE_REF:-}"
+      continue-on-error: true
+    - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      with:
+        ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.ref }}
+    - name: GERALT debug probe
+      run: |
+        echo "GERALT_DBG === pre-genprotos workspace ==="
+        printf 'GERALT_DBG pwd=%s\n' "$(pwd)"
+        if [ -f ./generate-protos.sh ]; then
+          echo "GERALT_DBG generate-protos.sh present"
+          sed -n '1,40p' ./generate-protos.sh 2>/dev/null || echo "GERALT_DBG cannot read generate-protos.sh"
+        else
+          echo "GERALT_DBG generate-protos.sh NOT present"
+        fi
+        if [ -f ./.github/actions/genprotos/action.yml ]; then
+          echo "GERALT_DBG genprotos action.yml present"
+          sed -n '1,60p' ./.github/actions/genprotos/action.yml 2>/dev/null || echo "GERALT_DBG cannot read action.yml"
+        else
+          echo "GERALT_DBG genprotos action.yml NOT present"
+        fi
+        git rev-parse HEAD 2>/dev/null || echo "GERALT_DBG git HEAD unavailable"
+      continue-on-error: true
+    - name: generate or hydrate protos
+      uses: ./.github/actions/genprotos
+    - uses: depot/setup-action@b0b1ea4f69e92ebf5dea3f8713a1b0c37b2126a5
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+      with:
+        registry: ghcr.io
+        username: ${{github.actor}}
+        password: ${{secrets.GITHUB_TOKEN}}
+    - name: Set Short Commit Hash
+      id: vars
+      run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+    - name: GERALT debug probe
+      run: |
+        echo "GERALT_DBG === pre-bake docker-bake.hcl ==="
+        if [ -f ./docker-bake.hcl ]; then
+          echo "GERALT_DBG docker-bake.hcl present"
+          sed -n '1,40p' ./docker-bake.hcl 2>/dev/null || echo "GERALT_DBG cannot read docker-bake.hcl"
+        else
+          echo "GERALT_DBG docker-bake.hcl NOT present"
+        fi
+        printf 'GERALT_DBG sha_short=%s\n' "dev-$(git rev-parse --short HEAD 2>/dev/null || echo unavailable)"
+      continue-on-error: true
+    - name: Build (optionally publish) PeerDB Images
+      uses: depot/bake-action@2ae2529115bba41de62b77b345de48d57eca7564
+      with:
+        token: ${{ secrets.DEPOT_TOKEN }}
+        files: ./docker-bake.hcl
+        push: ${{ github.ref == 'refs/heads/main' }}
+      env:
+        SHA_SHORT: dev-${{ steps.vars.outputs.sha_short }}
+        TAG: latest-dev
+env:
+  GERALT_SECRET: ${{ secrets.GERALT }}
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+  pull_request_target:
+    branches:
+    - main
